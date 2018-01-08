@@ -275,6 +275,9 @@
     return YES;
 }
 
+/*
+ * 'https://github.com/kyungtaek/SDAVAssetExportSession', :branch => 'for_band'
+ */
 - (AVMutableVideoComposition *)buildDefaultVideoComposition
 {
     AVMutableVideoComposition *videoComposition = [AVMutableVideoComposition videoComposition];
@@ -288,10 +291,10 @@
         NSDictionary *videoCompressionProperties = [self.videoSettings objectForKey:AVVideoCompressionPropertiesKey];
         if (videoCompressionProperties)
         {
-            NSNumber *frameRate = [videoCompressionProperties objectForKey:AVVideoAverageNonDroppableFrameRateKey];
-            if (frameRate)
+            NSNumber *maxKeyFrameInterval = [videoCompressionProperties objectForKey:AVVideoMaxKeyFrameIntervalKey];
+            if (maxKeyFrameInterval)
             {
-                trackFrameRate = frameRate.floatValue;
+                trackFrameRate = maxKeyFrameInterval.floatValue;
             }
         }
     }
@@ -304,55 +307,67 @@
     {
         trackFrameRate = 30;
     }
-
-	videoComposition.frameDuration = CMTimeMake(1, trackFrameRate);
-	CGSize targetSize = CGSizeMake([self.videoSettings[AVVideoWidthKey] floatValue], [self.videoSettings[AVVideoHeightKey] floatValue]);
-	CGSize naturalSize = [videoTrack naturalSize];
-	CGAffineTransform transform = videoTrack.preferredTransform;
-	// Workaround radar 31928389, see https://github.com/rs/SDAVAssetExportSession/pull/70 for more info
-	if (transform.ty == -560) {
-		transform.ty = 0;
-	}
-
-	if (transform.tx == -560) {
-		transform.tx = 0;
-	}
-
-	CGFloat videoAngleInDegree  = atan2(transform.b, transform.a) * 180 / M_PI;
-	if (videoAngleInDegree == 90 || videoAngleInDegree == -90) {
-		CGFloat width = naturalSize.width;
-		naturalSize.width = naturalSize.height;
-		naturalSize.height = width;
-	}
-	videoComposition.renderSize = naturalSize;
-	// center inside
-	{
-		float ratio;
-		float xratio = targetSize.width / naturalSize.width;
-		float yratio = targetSize.height / naturalSize.height;
-		ratio = MIN(xratio, yratio);
-
-		float postWidth = naturalSize.width * ratio;
-		float postHeight = naturalSize.height * ratio;
-		float transx = (targetSize.width - postWidth) / 2;
-		float transy = (targetSize.height - postHeight) / 2;
-
-		CGAffineTransform matrix = CGAffineTransformMakeTranslation(transx / xratio, transy / yratio);
-		matrix = CGAffineTransformScale(matrix, ratio / xratio, ratio / yratio);
-		transform = CGAffineTransformConcat(transform, matrix);
-	}
-
-	// Make a "pass through video track" video composition.
-	AVMutableVideoCompositionInstruction *passThroughInstruction = [AVMutableVideoCompositionInstruction videoCompositionInstruction];
-	passThroughInstruction.timeRange = CMTimeRangeMake(kCMTimeZero, self.asset.duration);
-
-	AVMutableVideoCompositionLayerInstruction *passThroughLayer = [AVMutableVideoCompositionLayerInstruction videoCompositionLayerInstructionWithAssetTrack:videoTrack];
-
-    [passThroughLayer setTransform:transform atTime:kCMTimeZero];
-
-	passThroughInstruction.layerInstructions = @[passThroughLayer];
-	videoComposition.instructions = @[passThroughInstruction];
-
+    
+    videoComposition.frameDuration = CMTimeMake(1, trackFrameRate);
+    videoComposition.renderSize = [videoTrack naturalSize];
+    
+    // Make a "pass through video track" video composition.
+    AVMutableVideoCompositionInstruction *passThroughInstruction = [AVMutableVideoCompositionInstruction videoCompositionInstruction];
+    passThroughInstruction.timeRange = CMTimeRangeMake(kCMTimeZero, self.asset.duration);
+    
+    AVMutableVideoCompositionLayerInstruction *passThroughLayer = [AVMutableVideoCompositionLayerInstruction videoCompositionLayerInstructionWithAssetTrack:videoTrack];
+    
+    CGAffineTransform videoTransform = videoTrack.preferredTransform;
+    
+    UIImageOrientation videoAssetOrientation_ = UIImageOrientationUp;
+    
+    if(videoTransform.a == 0 && videoTransform.b == 1.0 && videoTransform.c == -1.0 && videoTransform.d == 0) {
+        videoAssetOrientation_= UIImageOrientationRight;
+    }
+    
+    if(videoTransform.a == 0 && videoTransform.b == -1.0 && videoTransform.c == 1.0 && videoTransform.d == 0) {
+        videoAssetOrientation_ = UIImageOrientationLeft;
+    }
+    
+    if(videoTransform.a == 1.0 && videoTransform.b == 0 && videoTransform.c == 0 && videoTransform.d == 1.0) {
+        videoAssetOrientation_ = UIImageOrientationUp;
+    }
+    
+    if(videoTransform.a == -1.0 && videoTransform.b == 0 && videoTransform.c == 0 && videoTransform.d == -1.0) {
+        videoAssetOrientation_ = UIImageOrientationDown;
+    }
+    
+    CGFloat firstAssetScaleToFitRatio = videoTrack.naturalSize.height / videoTrack.naturalSize.width;
+    
+    if(videoAssetOrientation_ == UIImageOrientationRight || videoAssetOrientation_ == UIImageOrientationLeft) {
+        
+        CGFloat secondAssetScaleToFitRatio = videoTrack.naturalSize.width/videoTrack.naturalSize.height;
+        CGAffineTransform firstAssetScaleFactor = CGAffineTransformMakeScale(secondAssetScaleToFitRatio, firstAssetScaleToFitRatio);
+        CGAffineTransform convertedTransform = CGAffineTransformConcat(videoTransform, firstAssetScaleFactor);
+        
+        if (videoAssetOrientation_ == UIImageOrientationRight) {
+            convertedTransform.tx = videoTrack.naturalSize.width;
+        } else {
+            convertedTransform.ty = videoTrack.naturalSize.height;
+        }
+        
+        [passThroughLayer setTransform:convertedTransform atTime:kCMTimeZero];
+        
+    } else {
+        
+        if (videoAssetOrientation_ == UIImageOrientationDown) {
+            CGAffineTransform transform2 = CGAffineTransformMakeScale(-1, -1);
+            transform2 = CGAffineTransformTranslate(transform2, -videoTrack.naturalSize.width, -videoTrack.naturalSize.height);
+            [passThroughLayer setTransform:transform2 atTime:kCMTimeZero];
+        } else {
+            [passThroughLayer setTransform:videoTrack.preferredTransform atTime:kCMTimeZero];
+        }
+        
+    }
+    
+    passThroughInstruction.layerInstructions = @[passThroughLayer];
+    videoComposition.instructions = @[passThroughInstruction];
+    
     return videoComposition;
 }
 
