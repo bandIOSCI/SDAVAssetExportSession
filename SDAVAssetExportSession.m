@@ -13,6 +13,10 @@
 
 #import "SDAVAssetExportSession.h"
 
+// tag => '1.0' 원본 소스 ( https://github.com/rs/SDAVAssetExportSession.git )
+// tag => '1.1' DefaultVideoComposition 수정 ( https://github.com/kyungtaek/SDAVAssetExportSession, :branch => 'for_band' )
+// tag => '1.2' Crash(-[AVAssetWriterInput appendSampleBuffer:] Cannot append sample buffer: Must start a session (using -[AVAssetWriter startSessionAtSourceTime:) first') 방어로직 추가
+
 @interface SDAVAssetExportSession ()
 
 @property (nonatomic, assign, readwrite) float progress;
@@ -169,8 +173,20 @@
         }
     }
     
-    [self.writer startWriting];
-    [self.reader startReading];
+    //
+    // -[AVAssetWriterInput appendSampleBuffer:] Cannot append sample buffer: Must start a session (using -[AVAssetWriter startSessionAtSourceTime:) first' 에 대한 방어 로직
+    //
+    if (![self.reader startReading]) {
+        _error = self.reader.error;
+        handler();
+        return;
+    } else if (![self.writer startWriting]) {
+        [self.reader cancelReading];
+        _error = self.writer.error;
+        handler();
+        return;
+    }
+    
     [self.writer startSessionAtSourceTime:self.timeRange.start];
 
     __block BOOL videoCompleted = NO;
